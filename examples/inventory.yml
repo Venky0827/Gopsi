@@ -1,0 +1,8 @@
+all:
+  children:
+    web:
+      hosts:
+        localhost: { host: 127.0.0.1 }
+  vars:
+    user: $USER
+    ssh_private_key_file: ~/.ssh/id_rsa
