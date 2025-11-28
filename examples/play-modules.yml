@@ -1,0 +1,57 @@
+---
+- hosts: all
+  become: true
+  vars:
+    workdir: /tmp/gopsi-demo
+  tasks:
+  - name: ensure workdir exists
+    file:
+      path: "{{ workdir }}"
+      state: present
+
+  - name: copy inline content
+    copy:
+      content: "hello world"
+      dest: "{{ workdir }}/hello.txt"
+      mode: "0644"
+
+  - name: add sysctl line
+    lineinfile:
+      path: /etc/sysctl.conf
+      regexp: "^net\\.ipv4\\.ip_forward="
+      line: "net.ipv4.ip_forward=1"
+      state: present
+
+  - name: download archive
+    get_url:
+      url: https://example.com/archive.tar.gz
+      dest: "{{ workdir }}/archive.tar.gz"
+
+  - name: unarchive into workdir
+    unarchive:
+      src: "{{ workdir }}/archive.tar.gz"
+      dest: "{{ workdir }}/extracted"
+
+  - name: clone repository
+    git:
+      repo: https://github.com/git/git
+      dest: "{{ workdir }}/git-src"
+      version: master
+
+  - name: python package via pip user install
+    pip:
+      name: requests
+      state: present
+
+  - name: shell command with pipeline
+    shell: |
+      echo "pipeline" | tr a-z A-Z
+
+  - name: schedule nightly cron
+    cron:
+      name: nightly_backup
+      user: root
+      minute: "0"
+      hour: "2"
+      job: "/usr/local/bin/backup"
+      state: present

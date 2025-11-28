@@ -41,7 +41,8 @@ func (m mod) Check(ctx context.Context, c module.Conn, args map[string]any) (mod
     defer rc.Close()
     rb, _ := io.ReadAll(rc)
     sumOld := sum(rb)
-    return module.Result{Changed: sumNew != sumOld, Data: map[string]any{"before": sumOld, "after": sumNew}}, nil
+    arts := map[string]any{"dest": dest, "before": sumOld, "after": sumNew}
+    return module.Result{Changed: sumNew != sumOld, Data: map[string]any{"before": sumOld, "after": sumNew}, Artifacts: arts}, nil
 }
 
 func (m mod) Apply(ctx context.Context, c module.Conn, args map[string]any) (module.Result, error) {
@@ -60,7 +61,8 @@ func (m mod) Apply(ctx context.Context, c module.Conn, args map[string]any) (mod
     if m, ok := args["vars"].(map[string]any); ok { vars = m }
     if err := t.Execute(&buf, vars); err != nil { return module.Result{}, err }
     if err := c.Put(ctx, bytes.NewReader(buf.Bytes()), dest, mode); err != nil { return module.Result{}, err }
-    return module.Result{Changed: true, Msg: "updated"}, nil
+    arts := map[string]any{"dest": dest, "mode": fmt.Sprintf("%#o", mode)}
+    return module.Result{Changed: true, Msg: "updated", Artifacts: arts}, nil
 }
 
 func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }

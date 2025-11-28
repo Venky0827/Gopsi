@@ -26,13 +26,16 @@ func (m mod) Check(ctx context.Context, c module.Conn, args map[string]any) (mod
     active := out == "active\n"
     switch state {
     case "started":
-        return module.Result{Changed: !active}, nil
+        arts := map[string]any{"name": name, "state": state, "active": active}
+        return module.Result{Changed: !active, Artifacts: arts}, nil
     case "stopped":
-        return module.Result{Changed: active}, nil
+        arts := map[string]any{"name": name, "state": state, "active": active}
+        return module.Result{Changed: active, Artifacts: arts}, nil
     case "restarted":
-        return module.Result{Changed: true}, nil
+        arts := map[string]any{"name": name, "state": state}
+        return module.Result{Changed: true, Artifacts: arts}, nil
     default:
-        return module.Result{Changed: false}, nil
+        return module.Result{Changed: false, Artifacts: map[string]any{"name": name, "state": state, "active": active}}, nil
     }
 }
 
@@ -52,7 +55,7 @@ func (m mod) Apply(ctx context.Context, c module.Conn, args map[string]any) (mod
     }
     _, _, _, err := c.Exec(ctx, cmd, nil, false)
     if err != nil { return module.Result{}, err }
-    return module.Result{Changed: true}, nil
+    return module.Result{Changed: true, Artifacts: map[string]any{"name": name, "state": state, "cmd": cmd}}, nil
 }
 
 func str(v any) string { if v == nil { return "" }; return fmt.Sprintf("%v", v) }

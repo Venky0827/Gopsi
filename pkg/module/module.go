@@ -4,12 +4,14 @@ import (
     "context"
     "io"
     "os"
+    "sort"
 )
 
 type Result struct {
     Changed bool
     Msg     string
     Data    map[string]any
+    Artifacts map[string]any
 }
 
 type Module interface {
@@ -29,3 +31,10 @@ var registry = map[string]Module{}
 
 func Register(m Module) { registry[m.Name()] = m }
 func Get(name string) Module { return registry[name] }
+
+func List() []string {
+    names := make([]string, 0, len(registry))
+    for n := range registry { names = append(names, n) }
+    sort.Strings(names)
+    return names
+}

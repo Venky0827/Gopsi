@@ -3,13 +3,9 @@
   vars:
     hello_file: /tmp/at-hello.txt
   tasks:
-  # - name: create hello file
-  #   file:
-  #     path: "{{ hello_file }}"
-  #     state: present
-  # - name: write hello via template
-  #   template:
-  #     src: examples/hello.tmpl
-  #     dest: "{{ hello_file }}"
+  - name: Manage package
+    package:
+      name: tmux
+      action: remove
   - name: run a command
-    command: echo "automation ready"
+    command: touch files1

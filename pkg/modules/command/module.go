@@ -47,7 +47,8 @@ func (m mod) Apply(ctx context.Context, c module.Conn, args map[string]any) (mod
     out, errOut, exit, err := c.Exec(ctx, cmd, env, sudo)
     if err != nil { return module.Result{}, err }
     msg := strings.TrimSpace(out + "\n" + errOut)
-    return module.Result{Changed: exit == 0, Msg: msg}, nil
+    arts := map[string]any{"stdout": out, "stderr": errOut, "exit": exit, "cmd": cmd, "sudo": sudo}
+    return module.Result{Changed: exit == 0, Msg: msg, Artifacts: arts}, nil
 }
 
 func str(v any) string { if v == nil { return "" }; return fmt.Sprintf("%v", v) }
