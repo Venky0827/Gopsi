@@ -7,20 +7,19 @@ on:
 
 jobs:
   build-rpm:
-    runs-on: ubuntu-latest
+    runs-on: centos-9  # Use CentOS/RHEL-based runner
 
     env:
       ARCH: x86_64
-      GOARCH: amd64  # Go uses "amd64" instead of x86_64
+      GOARCH: amd64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install RPM tools
+      - name: Install RPM build tools and Go
         run: |
-          sudo apt-get update
-          sudo apt-get install -y rpm createrepo-c golang
+          sudo dnf install -y rpm-build createrepo golang
 
       - name: Setup RPM build structure
         run: |
@@ -37,7 +36,7 @@ jobs:
         run: |
           echo "%_arch ${ARCH}" >> ~/.rpmmacros
 
-      - name: Build RPMs (x86_64)
+      - name: Build RPMs
         run: |
           rpmbuild -ba ~/rpmbuild/SPECS/gopsi.spec
           rpmbuild -ba ~/rpmbuild/SPECS/gopsi-release.spec
