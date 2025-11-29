@@ -1,0 +1,70 @@
+name: Build & Publish RPM + YUM Repo
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-latest
+
+    env:
+      ARCH: x86_64
+      GOARCH: amd64  # Go uses "amd64" instead of x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install RPM tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm createrepo golang
+
+      - name: Setup RPM build structure
+        run: |
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          tar czf ~/rpmbuild/SOURCES/gopsi-${GITHUB_REF_NAME}.tar.gz .
+
+      - name: Copy SPEC files
+        run: |
+          cp packaging/gopsi.spec ~/rpmbuild/SPECS/
+          cp release/gopsi.repo ~/rpmbuild/SOURCES/
+          cp packaging/gopsi-release.spec ~/rpmbuild/SPECS/
+
+      - name: Export build arch to RPM macros
+        run: |
+          echo "%_arch ${ARCH}" >> ~/.rpmmacros
+
+      - name: Build RPMs (x86_64)
+        run: |
+          rpmbuild -ba ~/rpmbuild/SPECS/gopsi.spec
+          rpmbuild -ba ~/rpmbuild/SPECS/gopsi-release.spec
+
+      - name: Upload RPMs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ~/rpmbuild/RPMS/${ARCH}/*.rpm
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: repo
+
+      - name: Copy RPMs into YUM repo
+        run: |
+          mkdir -p repo/x86_64
+          cp ~/rpmbuild/RPMS/${ARCH}/*.rpm repo/x86_64/
+
+      - name: Update YUM repo metadata
+        run: |
+          createrepo repo
+          cd repo
+          git config user.email "anandbandari0@gmail.com"
+          git config user.name "Venky0827"
+          git add .
+          git commit -m "Update repo for ${GITHUB_REF_NAME}" || true
+          git push

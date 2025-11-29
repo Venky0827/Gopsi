@@ -1,0 +1,5 @@
+[gopsi]
+name=Gopsi Repository
+baseurl=https://venky0827.github.io/Gopsi/x86_64/
+enabled=1
+gpgcheck=0
