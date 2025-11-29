@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-rpm:
-    runs-on: centos-9  # Use CentOS/RHEL-based runner
+    runs-on: self-hosted # Use CentOS/RHEL-based runner
 
     env:
       ARCH: x86_64
