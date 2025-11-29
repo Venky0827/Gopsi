@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write     # REQUIRED for GitHub releases
+  pages: write
+  id-token: write
+
 jobs:
   build-rpm:
     runs-on: self-hosted
@@ -15,30 +20,38 @@ jobs:
 
       - name: Prepare RPM build tree
         run: |
-          rpmdev-setuptree
+          # Use HOME explicitly (important for GH self-hosted)
+          TOPDIR="$HOME/rpmbuild"
+
+          rpmdev-setuptree  # creates $HOME/rpmbuild structure
+
           VERSION="${GITHUB_REF_NAME#v}"
-          
           echo "Building version: $VERSION"
 
-          # Create source tarball with correct directory name for rpmbuild
+          # Create source tarball with correct folder structure
           tar --transform "s,^\.,gopsi-$VERSION," \
-              -czf ~/rpmbuild/SOURCES/gopsi-$VERSION.tar.gz .
+              -czf "$TOPDIR/SOURCES/gopsi-$VERSION.tar.gz" .
 
-          # Copy SPEC files + repo file
-          cp packaging/gopsi.spec ~/rpmbuild/SPECS/
-          cp packaging/gopsi-release.spec ~/rpmbuild/SPECS/
-          cp release/gopsi.repo ~/rpmbuild/SOURCES/
+          # Copy SPEC files
+          cp packaging/gopsi.spec "$TOPDIR/SPECS/"
+          cp packaging/gopsi-release.spec "$TOPDIR/SPECS/"
+
+          # Copy repo file
+          cp release/gopsi.repo "$TOPDIR/SOURCES/"
 
       - name: Build RPMs
         run: |
-          rpmbuild -ba ~/rpmbuild/SPECS/gopsi.spec
-          rpmbuild -ba ~/rpmbuild/SPECS/gopsi-release.spec
+          TOPDIR="$HOME/rpmbuild"
+          rpmbuild -ba "$TOPDIR/SPECS/gopsi.spec"
+          rpmbuild -ba "$TOPDIR/SPECS/gopsi-release.spec"
 
       - name: Upload RPMs to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ~/rpmbuild/RPMS/**/*.rpm
+            ${{ runner.home }}/rpmbuild/RPMS/**/*.rpm
+          token: ${{ secrets.GITHUB_TOKEN }}
+          overwrite_files: true
 
       - name: Checkout gh-pages
         uses: actions/checkout@v4
@@ -48,14 +61,19 @@ jobs:
 
       - name: Update YUM Repo (gh-pages)
         run: |
+          TOPDIR="$HOME/rpmbuild"
           mkdir -p repo/x86_64
-          cp ~/rpmbuild/RPMS/x86_64/*.rpm repo/x86_64/
 
+          # Copy new RPMs to repo directory
+          cp $TOPDIR/RPMS/x86_64/*.rpm repo/x86_64/
+
+          # Regenerate repo metadata
           createrepo repo
 
           cd repo
           git config user.email "ci@automation"
           git config user.name "Gopsi CI Bot"
+
           git add .
           git commit -m "Update repo for ${GITHUB_REF_NAME}" || true
           git push
