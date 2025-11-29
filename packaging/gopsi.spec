@@ -5,20 +5,25 @@ Summary:        Gopsi - A Go-based automation tool
 License:        MIT
 URL:            https://github.com/Venky0827/Gopsi
 
+# Disable automatic debug package creation
+%global debug_package %{nil}
+
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  golang
 
 %description
-Gopsi - Infrastructure automation tool written in Go.
+Gopsi is an infrastructure automation tool written in Go.
 
 %prep
 %setup -q
 
 %build
-# Build static 64-bit binary
+# Use Go Modules
 export GO111MODULE=on
+# Ensure static build
 export CGO_ENABLED=0
+# Cross-build for Linux AMD64
 export GOOS=linux
 export GOARCH=amd64
 
@@ -31,5 +36,5 @@ install -Dm755 gopsi %{buildroot}/usr/bin/gopsi
 /usr/bin/gopsi
 
 %changelog
-* Thu Nov 27 2025 Venky <anandbandari0@gmail.com> - 0.2.0-1
-- Initial RPM build
+* Fri Nov 29 2025 Venkatesh Bandaru <venky@example.com> - 0.2.0-1
+- Initial RPM release of gopsi
