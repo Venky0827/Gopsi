@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write     # REQUIRED for GitHub releases
+  contents: write     # Required for GitHub releases
   pages: write
   id-token: write
 
@@ -20,7 +20,7 @@ jobs:
 
       - name: Prepare RPM build tree
         run: |
-          # Use HOME explicitly (important for GH self-hosted)
+          # Use explicit HOME for self-hosted runner
           TOPDIR="$HOME/rpmbuild"
 
           rpmdev-setuptree  # creates $HOME/rpmbuild structure
@@ -28,7 +28,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Building version: $VERSION"
 
-          # Create source tarball with correct folder structure
+          # Create source tarball with proper folder structure for rpmbuild
           tar --transform "s,^\.,gopsi-$VERSION," \
               -czf "$TOPDIR/SOURCES/gopsi-$VERSION.tar.gz" .
 
@@ -64,11 +64,11 @@ jobs:
           TOPDIR="$HOME/rpmbuild"
           mkdir -p repo/x86_64
 
-          # Copy new RPMs to repo directory
+          # Copy new RPMs into x86_64 folder
           cp $TOPDIR/RPMS/x86_64/*.rpm repo/x86_64/
 
-          # Regenerate repo metadata
-          createrepo repo
+          # Generate repository metadata inside x86_64
+          createrepo --update repo/x86_64
 
           cd repo
           git config user.email "ci@automation"
