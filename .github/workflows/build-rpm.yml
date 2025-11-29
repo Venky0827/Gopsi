@@ -20,7 +20,7 @@ jobs:
       - name: Install RPM tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm createrepo golang
+          sudo apt-get install -y rpm createrepo-c golang
 
       - name: Setup RPM build structure
         run: |
