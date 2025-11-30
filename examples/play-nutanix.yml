@@ -1,0 +1,9 @@
+---
+- hosts: all
+  become: false
+  tasks:
+  - name: simulate power on via nutanix plugin
+    nutanix_vm:
+      endpoint: https://prism.example.com:9440
+      name: demo-vm
+      action: power_on

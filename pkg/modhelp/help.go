@@ -44,18 +44,23 @@ ARTIFACTS
   stdout, stderr, exit, cmd, sudo
 `,
     "file": `NAME
-  file - ensure filesystem entry present or absent
+  file - ensure a file present or absent with content and permissions
 
 SYNOPSIS
-  - name: ensure dir
-    file: { path: /etc/app, state: present }
+  - name: create file
+    file: { path: /etc/app, file_name: app.cfg, state: present, content: "key=val", mode: "0644" }
+  - name: remove file
+    file: { path: /etc/app, file_name: app.cfg, state: absent }
 
 ARGS
-  path      string   required
-  state     string   present|absent
+  path       string   required directory path
+  file_name  string   required file name
+  state      string   present|absent
+  content    string   required when state=present
+  mode       string   optional octal permissions
 
 ARTIFACTS
-  path, state, exists
+  path, file_name, dest, before, after, mode
 `,
     "copy": `NAME
   copy - copy local content to remote path

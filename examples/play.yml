@@ -3,9 +3,13 @@
   vars:
     hello_file: /tmp/at-hello.txt
   tasks:
-  - name: Manage package
-    package:
-      name: tmux
-      action: remove
-  - name: run a command
-    command: touch files1
+  - name: Create file in /root
+    file:
+      file_name: test_file.txt
+      path: /root
+      state: absent
+      content: |
+        This is testing file1 module
+        This is testing file2 module
+        This is testing file3 module
+      mode: "0777"

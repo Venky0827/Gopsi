@@ -7,13 +7,16 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"plugin"
+	"sort"
 	"strings"
 	"time"
 
 	"gopsi/pkg/inventory"
-	"gopsi/pkg/module"
 	"gopsi/pkg/modhelp"
+	"gopsi/pkg/module"
 	_ "gopsi/pkg/modules/command"
 	_ "gopsi/pkg/modules/copy"
 	_ "gopsi/pkg/modules/cron"
@@ -33,11 +36,21 @@ import (
 	"gopsi/pkg/version"
 )
 
+var defaultModules []string
+var defaultSet = map[string]struct{}{}
+
+type namespaced interface{ Namespace() string }
+
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" || os.Args[1] == "-h" {
 		printUsage()
 		os.Exit(0)
 	}
+	defaultModules = module.List()
+	for _, n := range defaultModules {
+		defaultSet[n] = struct{}{}
+	}
+	loadPlugins()
 	cmd := os.Args[1]
 	switch cmd {
 	case "help":
@@ -66,11 +79,66 @@ func main() {
 	case "version":
 		fmt.Printf("Gopsi %s\n", version.Version)
 	case "module":
-		if len(os.Args) < 4 { fmt.Fprintln(os.Stderr, "usage: gopsi module <name> help"); os.Exit(2) }
-		name := os.Args[2]
-		action := os.Args[3]
-		if action != "help" { fmt.Fprintln(os.Stderr, "supported action: help"); os.Exit(2) }
-		if doc, ok := modhelp.Get(name); ok { fmt.Println(doc) } else { fmt.Println(modhelp.FormatNotFound(name)); os.Exit(1) }
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: gopsi module <name|list|install|remove> [help]")
+			os.Exit(2)
+		}
+		sub := os.Args[2]
+		if sub == "list" {
+			names := module.List()
+			for _, n := range names {
+				fmt.Println(n)
+			}
+			os.Exit(0)
+		} else if sub == "install" {
+			if len(os.Args) < 4 {
+				fmt.Fprintln(os.Stderr, "usage: gopsi module install <name>")
+				os.Exit(2)
+			}
+			name := os.Args[3]
+			switch name {
+			case "nutanix":
+				if err := installNutanix(); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				fmt.Println("installed: nutanix")
+			default:
+				fmt.Fprintln(os.Stderr, "unknown module pack")
+				os.Exit(2)
+			}
+			os.Exit(0)
+		} else if sub == "remove" {
+			if len(os.Args) < 4 {
+				fmt.Fprintln(os.Stderr, "usage: gopsi module remove <name>")
+				os.Exit(2)
+			}
+			name := os.Args[3]
+			p := filepath.Join(gopsiHome(), "plugins", name+".so")
+			_ = os.Remove(p)
+			hp := filepath.Join(gopsiHome(), "plugins", "help", name+".md")
+			_ = os.Remove(hp)
+			fmt.Println("removed:", name)
+			os.Exit(0)
+		} else if len(os.Args) >= 4 && os.Args[3] == "help" {
+			name := os.Args[2]
+			if doc, ok := modhelp.Get(name); ok {
+				fmt.Println(doc)
+				os.Exit(0)
+			}
+			hp := filepath.Join(gopsiHome(), "plugins", "help", name+".md")
+			b, err := os.ReadFile(hp)
+			if err != nil {
+				fmt.Println("no manual entry for", name)
+				os.Exit(1)
+			}
+			os.Stdout.Write(b)
+			os.Exit(0)
+		} else {
+			fmt.Fprintln(os.Stderr, "usage: gopsi module <list|install|remove|<name> help>")
+			os.Exit(2)
+		}
+		// removed duplicate case
 	case "completion":
 		if len(os.Args) < 3 {
 			usageCompletion()
@@ -258,10 +326,45 @@ func main() {
 		}
 
 	case "modules":
-		// ensure module packages are imported for init() side-effects
 		names := module.List()
+		groups := map[string][]string{"default": {}}
+		for _, n := range defaultModules {
+			groups["default"] = append(groups["default"], n)
+		}
 		for _, n := range names {
-			fmt.Println(n)
+			if _, ok := defaultSet[n]; ok {
+				continue
+			}
+			ns := "custom"
+			if m := module.Get(n); m != nil {
+				if nm, ok := any(m).(namespaced); ok {
+					if s := nm.Namespace(); s != "" {
+						ns = s
+					}
+				}
+			}
+			groups[ns] = append(groups[ns], n)
+		}
+		var others []string
+		for k := range groups {
+			if k != "default" {
+				others = append(others, k)
+			}
+		}
+		sort.Strings(others)
+		fmt.Println(colorViolet("default") + ":")
+		ds := groups["default"]
+		sort.Strings(ds)
+		for _, n := range ds {
+			fmt.Printf("  - %s: %s\n", colorLightYellow(n), colorLightBlue(shortDesc(n)))
+		}
+		for _, k := range others {
+			items := groups[k]
+			sort.Strings(items)
+			fmt.Println(colorViolet(k) + ":")
+			for _, n := range items {
+				fmt.Printf("  - %s: %s\n", colorLightYellow(n), colorLightBlue(shortDesc(n)))
+			}
 		}
 		if len(names) == 0 {
 			os.Exit(1)
@@ -272,70 +375,160 @@ func main() {
 	}
 }
 
+func colorBold(s string) string        { return "\033[1m" + s + "\033[0m" }
+func colorViolet(s string) string      { return "\033[95;1m" + s + "\033[0m" }
+func colorLightYellow(s string) string { return "\033[93m" + s + "\033[0m" }
+func colorLightBlue(s string) string   { return "\033[94m" + s + "\033[0m" }
+func colorLightGreen(s string) string  { return "\033[92m" + s + "\033[0m" }
+func pad(s string, n int) string {
+	if len(s) >= n {
+		return s
+	}
+	b := make([]byte, n)
+	copy(b, s)
+	for i := len(s); i < n; i++ {
+		b[i] = ' '
+	}
+	return string(b)
+}
+func printGrid(name string, items []string) {
+	col := 18
+	cols := 2
+	inner := col*cols + (cols-1)*2
+	top := "┌" + strings.Repeat("─", inner) + "┐"
+	sep := "├" + strings.Repeat("─", inner) + "┤"
+	bot := "└" + strings.Repeat("─", inner) + "┘"
+	fmt.Println(colorBold(name))
+	fmt.Println(top)
+	line := fmt.Sprintf("│ %s%*s │", pad(fmt.Sprintf("count: %d", len(items)), inner-2), 0, "")
+	fmt.Println(line)
+	fmt.Println(sep)
+	if len(items) == 0 {
+		fmt.Println("│ " + pad("(none)", inner-2) + " │")
+		fmt.Println(bot)
+		return
+	}
+	rows := (len(items) + cols - 1) / cols
+	for i := 0; i < rows; i++ {
+		left := items[i]
+		r := i + rows
+		right := ""
+		if r < len(items) {
+			right = items[r]
+		}
+		l := pad(left, col)
+		rr := pad(right, col)
+		fmt.Println("│ " + l + "  " + rr + " │")
+	}
+	fmt.Println(bot)
+}
+
+func shortDesc(name string) string {
+	if doc, ok := modhelp.Get(name); ok {
+		lines := strings.Split(doc, "\n")
+		for i := 0; i+1 < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) == "NAME" {
+				line := strings.TrimSpace(lines[i+1])
+				// format: "<name> - <desc>"
+				parts := strings.SplitN(line, "-", 2)
+				if len(parts) == 2 {
+					return strings.TrimSpace(parts[1])
+				}
+				return line
+			}
+		}
+	}
+	hp := filepath.Join(gopsiHome(), "plugins", "help", name+".md")
+	if b, err := os.ReadFile(hp); err == nil {
+		lines := strings.Split(string(b), "\n")
+		for i := 0; i+1 < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) == "NAME" {
+				line := strings.TrimSpace(lines[i+1])
+				parts := strings.SplitN(line, "-", 2)
+				if len(parts) == 2 {
+					return strings.TrimSpace(parts[1])
+				}
+				return line
+			}
+		}
+	}
+	return "No description"
+}
+
 func printUsage() {
-	fmt.Println("Usage: gopsi <command> [flags]")
-	fmt.Println("Commands:")
-	fmt.Println("  run         Execute playbook(s) against hosts")
-	fmt.Println("  inventory   Inspect or list inventory hosts")
-	fmt.Println("  vault       Encrypt/decrypt variable files")
-	fmt.Println("  version     Show build version info")
-	fmt.Println("  ping        Check TCP reachability for inventory hosts")
-	fmt.Println("  modules     List registered modules")
-	fmt.Println("  completion  Output shell completion script (bash|zsh)")
-	fmt.Println("  help        Show detailed help for a command")
-	fmt.Println("Examples:")
-	fmt.Println("  gopsi run -i inventory.yml play.yml --check")
-	fmt.Println("  gopsi run -i inventory.yml play.yml --forks 10 --json")
-	fmt.Println("  gopsi inventory --list -i inventory.yml")
-	fmt.Println("  gopsi vault --mode encrypt --in vars.yml --out vars.enc --pass '...' ")
-	fmt.Println("  gopsi ping -i inventory.yml --limit web --timeout 5")
+	fmt.Println(colorViolet("Usage:") + " " + colorLightYellow("gopsi <command> [flags]"))
+	fmt.Println(colorViolet("Commands:"))
+	fmt.Println("  " + colorLightYellow("run") + "         " + colorLightBlue("Execute playbook(s) against hosts"))
+	fmt.Println("  " + colorLightYellow("inventory") + "   " + colorLightBlue("Inspect or list inventory hosts"))
+	fmt.Println("  " + colorLightYellow("vault") + "       " + colorLightBlue("Encrypt/decrypt variable files"))
+	fmt.Println("  " + colorLightYellow("version") + "     " + colorLightBlue("Show build version info"))
+	fmt.Println("  " + colorLightYellow("ping") + "        " + colorLightBlue("Check TCP reachability for inventory hosts"))
+	fmt.Println("  " + colorLightYellow("modules") + "     " + colorLightBlue("List registered modules"))
+	fmt.Println("  " + colorLightYellow("completion") + "  " + colorLightBlue("Output shell completion script (bash|zsh)"))
+	fmt.Println("  " + colorLightYellow("help") + "        " + colorLightBlue("Show detailed help for a command"))
+	fmt.Println(colorViolet("Flags by command:"))
+	fmt.Println("  " + colorLightYellow("run") + ": " + colorLightBlue("-i, --limit, --forks, --check, --json, -v, -vv, -vvv"))
+	fmt.Println("  " + colorLightYellow("inventory") + ": " + colorLightBlue("--list, -i"))
+	fmt.Println("  " + colorLightYellow("vault") + ": " + colorLightBlue("--mode, --in, --out, --pass"))
+	fmt.Println("  " + colorLightYellow("ping") + ": " + colorLightBlue("-i, --limit, --port, --timeout"))
+	fmt.Println("  " + colorLightYellow("modules") + ": " + colorLightBlue("(no flags)"))
+	fmt.Println("  " + colorLightYellow("completion") + ": " + colorLightBlue("bash|zsh"))
+	fmt.Println("  " + colorLightYellow("help") + ": " + colorLightBlue("help <run|inventory|vault|version|ping|modules>"))
+	fmt.Println(colorViolet("Examples:"))
+	fmt.Println("  " + colorLightGreen("Dry-run; shows predicted changes without applying"))
+	fmt.Println("  " + colorLightYellow("gopsi run -i inventory.yml play.yml --check"))
+	fmt.Println("  " + colorLightGreen("Increase parallelism and print per-task JSON"))
+	fmt.Println("  " + colorLightYellow("gopsi run -i inventory.yml play.yml --forks 10 --json"))
+	fmt.Println("  " + colorLightGreen("List resolved hosts from inventory"))
+	fmt.Println("  " + colorLightYellow("gopsi inventory --list -i inventory.yml"))
+	fmt.Println("  " + colorLightGreen("Encrypt a vars file using a passphrase"))
+	fmt.Println("  " + colorLightYellow("gopsi vault --mode encrypt --in vars.yml --out vars.enc --pass '...' "))
+	fmt.Println("  " + colorLightGreen("Check reachability for a group with a custom timeout"))
+	fmt.Println("  " + colorLightYellow("gopsi ping -i inventory.yml --limit web --timeout 5"))
 }
 
 func usageRun() {
-	fmt.Println("Usage: gopsi run [flags] <playbook>")
-	fmt.Println("Description:")
-	fmt.Println("  Executes YAML playbook tasks across selected hosts using SSH.")
-	fmt.Println("Flags:")
-	fmt.Println("  -i string       Path to inventory file (default 'inventory.yml').")
-	fmt.Println("  -limit string   Limit execution to a host or group name.")
-	fmt.Println("                  Example: --limit web or --limit host1")
-	fmt.Println("  -forks int      Number of parallel workers (default 5).")
-	fmt.Println("  -check          Check mode; shows predicted changes without applying.")
-	fmt.Println("  -json           Print per-task results as JSON lines.")
-	fmt.Println("  -v              Increase diagnostics verbosity.")
-	fmt.Println("  -vv             More verbose diagnostics.")
-	fmt.Println("  -vvv            Maximum verbosity.")
-	fmt.Println("Ordering:")
-	fmt.Println("  Flags can appear anywhere; they are normalized before parsing.")
-	fmt.Println("Notes:")
-	fmt.Println("  - Concurrency per play can be controlled via 'serial' in the playbook.")
-	fmt.Println("  - Facts are gathered automatically and available as 'facts' in templates/when.")
+	fmt.Println(colorViolet("Usage:") + " " + colorLightYellow("gopsi run [flags] <playbook>"))
+	fmt.Println(colorViolet("Description:"))
+	fmt.Println("  " + colorLightBlue("Executes YAML playbook tasks across selected hosts using SSH."))
+	fmt.Println(colorViolet("Flags:"))
+	fmt.Println("  " + colorLightYellow("-i string") + "  " + colorLightGreen("Inventory file path (default 'inventory.yml')"))
+	fmt.Println("  " + colorLightYellow("--limit string") + "  " + colorLightGreen("Limit execution to a host or group name"))
+	fmt.Println("  " + colorLightYellow("--forks int") + "  " + colorLightGreen("Number of parallel workers (default 5)"))
+	fmt.Println("  " + colorLightYellow("--check") + "  " + colorLightGreen("Dry-run; predict changes without applying"))
+	fmt.Println("  " + colorLightYellow("--json") + "  " + colorLightGreen("Print per-task results as JSON lines"))
+	fmt.Println("  " + colorLightYellow("-v") + ", " + colorLightYellow("-vv") + ", " + colorLightYellow("-vvv") + "  " + colorLightGreen("Increase diagnostics verbosity (1/2/3)"))
+	fmt.Println(colorViolet("Ordering:"))
+	fmt.Println("  " + colorLightBlue("Flags can appear anywhere; they are normalized before parsing."))
+	fmt.Println(colorViolet("Notes:"))
+	fmt.Println("  " + colorLightBlue("Concurrency per play can be controlled via 'serial' in the playbook."))
+	fmt.Println("  " + colorLightBlue("Facts are gathered automatically and available as 'facts' in templates/when."))
 }
 
 func usageInventory() {
-	fmt.Println("Usage: gopsi inventory --list -i <inventory>")
-	fmt.Println("Description:")
-	fmt.Println("  Lists resolved hostnames from the inventory.")
-	fmt.Println("Flags:")
-	fmt.Println("  --list          List all hosts in the inventory.")
-	fmt.Println("  -i string       Path to inventory YAML file (default 'inventory.yml').")
-	fmt.Println("Inventory keys:")
-	fmt.Println("  host                IP/DNS of the host")
-	fmt.Println("  user                SSH username")
-	fmt.Println("  ssh_private_key_file Path to SSH private key")
+	fmt.Println(colorViolet("Usage:") + " " + colorLightYellow("gopsi inventory --list -i <inventory>"))
+	fmt.Println(colorViolet("Description:"))
+	fmt.Println("  " + colorLightBlue("Lists resolved hostnames from the inventory."))
+	fmt.Println(colorViolet("Flags:"))
+	fmt.Println("  " + colorLightYellow("--list") + "  " + colorLightGreen("List all hosts in the inventory"))
+	fmt.Println("  " + colorLightYellow("-i string") + "  " + colorLightGreen("Path to inventory YAML file (default 'inventory.yml')"))
+	fmt.Println(colorViolet("Inventory keys:"))
+	fmt.Println("  " + colorLightYellow("host") + "  " + colorLightBlue("IP/DNS of the host"))
+	fmt.Println("  " + colorLightYellow("user") + "  " + colorLightBlue("SSH username"))
+	fmt.Println("  " + colorLightYellow("ssh_private_key_file") + "  " + colorLightBlue("Path to SSH private key"))
 }
 
 func usageVault() {
-	fmt.Println("Usage: gopsi vault --mode <encrypt|decrypt> --in <file|-> --out <file|-> [--pass <str>]")
-	fmt.Println("Description:")
-	fmt.Println("  Encrypts or decrypts YAML variable files using AES-GCM.")
-	fmt.Println("Flags:")
-	fmt.Println("  --mode string    Operation: encrypt or decrypt (default 'encrypt').")
-	fmt.Println("  --in string      Input file path or '-' for stdin (default '-').")
-	fmt.Println("  --out string     Output file path or '-' for stdout (default '-').")
-	fmt.Println("  --pass string    Passphrase; if omitted, uses AT_VAULT_PASSWORD env var.")
-	fmt.Println("Environment:")
-	fmt.Println("  AT_VAULT_PASSWORD  Optional passphrase source for non-interactive use.")
+	fmt.Println(colorViolet("Usage:") + " " + colorLightYellow("gopsi vault --mode <encrypt|decrypt> --in <file|-> --out <file|-> [--pass <str>]"))
+	fmt.Println(colorViolet("Description:"))
+	fmt.Println("  " + colorLightBlue("Encrypts or decrypts YAML variable files using AES-GCM."))
+	fmt.Println(colorViolet("Flags:"))
+	fmt.Println("  " + colorLightYellow("--mode string") + "  " + colorLightGreen("Operation: encrypt or decrypt (default 'encrypt')"))
+	fmt.Println("  " + colorLightYellow("--in string") + "  " + colorLightGreen("Input file path or '-' for stdin (default '-')"))
+	fmt.Println("  " + colorLightYellow("--out string") + "  " + colorLightGreen("Output file path or '-' for stdout (default '-')"))
+	fmt.Println("  " + colorLightYellow("--pass string") + "  " + colorLightGreen("Passphrase; if omitted, uses AT_VAULT_PASSWORD env var"))
+	fmt.Println(colorViolet("Environment:"))
+	fmt.Println("  " + colorLightYellow("AT_VAULT_PASSWORD") + "  " + colorLightBlue("Optional passphrase source for non-interactive use"))
 }
 
 func usageVersion() {
@@ -345,20 +538,75 @@ func usageVersion() {
 }
 
 func usagePing() {
-	fmt.Println("Usage: gopsi ping [flags]")
-	fmt.Println("Description:")
-	fmt.Println("  Checks TCP port reachability for hosts defined in the inventory.")
-	fmt.Println("Flags:")
-	fmt.Println("  -i string       Path to inventory file (default 'inventory.yml').")
-	fmt.Println("  -limit string   Limit execution to a host or group name.")
-	fmt.Println("  -port int       TCP port to check (default 22).")
-	fmt.Println("  -timeout int    connection timeout in seconds (default 5).")
+	fmt.Println(colorViolet("Usage:") + " " + colorLightYellow("gopsi ping [flags]"))
+	fmt.Println(colorViolet("Description:"))
+	fmt.Println("  " + colorLightBlue("Checks TCP port reachability for hosts defined in the inventory."))
+	fmt.Println(colorViolet("Flags:"))
+	fmt.Println("  " + colorLightYellow("-i string") + "  " + colorLightGreen("Path to inventory file (default 'inventory.yml')"))
+	fmt.Println("  " + colorLightYellow("--limit string") + "  " + colorLightGreen("Limit execution to a host or group name"))
+	fmt.Println("  " + colorLightYellow("--port int") + "  " + colorLightGreen("TCP port to check (default 22)"))
+	fmt.Println("  " + colorLightYellow("--timeout int") + "  " + colorLightGreen("Connection timeout in seconds (default 5)"))
 }
 
 func usageModules() {
 	fmt.Println("Usage: gopsi modules")
 	fmt.Println("Description:")
 	fmt.Println("  Lists module names registered via init() side-effects.")
+}
+
+func gopsiHome() string {
+	h := os.Getenv("GOPSI_HOME")
+	if h == "" {
+		h = filepath.Join(os.Getenv("HOME"), ".gopsi")
+	}
+	_ = os.MkdirAll(filepath.Join(h, "plugins"), 0755)
+	_ = os.MkdirAll(filepath.Join(h, "plugins", "help"), 0755)
+	return h
+}
+
+func loadPlugins() {
+	dir := filepath.Join(gopsiHome(), "plugins")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".so") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		pl, err := plugin.Open(p)
+		if err != nil {
+			continue
+		}
+		sym, err := pl.Lookup("Register")
+		if err != nil {
+			continue
+		}
+		if f, ok := sym.(func()); ok {
+			f()
+		}
+	}
+}
+
+func installNutanix() error {
+	out := filepath.Join(gopsiHome(), "plugins", "nutanix.so")
+	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", out, "./plugins/nutanix")
+	cmd.Env = os.Environ()
+	cmd.Dir = filepath.Dir(os.Args[0])
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	src := filepath.Join(filepath.Dir(os.Args[0]), "plugins", "nutanix", "help", "nutanix_vm.md")
+	dst := filepath.Join(gopsiHome(), "plugins", "help", "nutanix_vm.md")
+	b, err := os.ReadFile(src)
+	if err == nil {
+		_ = os.WriteFile(dst, b, 0644)
+	}
+	return nil
 }
 
 func usageCompletion() {
